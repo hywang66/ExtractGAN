@@ -63,6 +63,7 @@ class Decoder(nn.Module):
         # return self.model(input)
         pass
 
+'''to do '''
 
 class ResnetBlock(nn.Module):
     def __init__(self, dim, padding_type='zero', norm_layer = nn.InstanceNorm2d, use_dropout=False):
