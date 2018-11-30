@@ -2,18 +2,17 @@ import os
 from PIL import Image
 import torchvision
 from torchvision import transforms 
-from random import shuffle
 from torch.utils import data
 import numpy as np
-
+import random
 class Dataset(data.Dataset):
-  def __init__(self, A,B):
-        self.A = A
-        self.B = B
+  def __init__(self, style_list):
+        self.style_list= style_list
   def __len__(self):
-        return int(min(len(self.A),len(self.B))/2)
+        return int(min([len(style) for style in self.style_list])/2)
   def __getitem__(self, index):
-        return data_process(self.A,self.B)
+        num_list = random.sample(range(0,4),2)
+        return data_process(self.style_list[num_list[0]],self.style_list[num_list[1]])
 
 def return_transform(size):
     transform = transforms.Compose([
@@ -31,7 +30,8 @@ def data_process(A,B):
     b = list(np.random.randint(0,len(B),size = 2))
     return tuple((normal_transform(A[a[0]]),normal_transform(B[b[0]]),style_transform(A[a[1]]),style_transform(B[b[1]])))
 
-def data_loader(dir1):
+
+def loading(dir1):
     dir1 = os.path.abspath(os.path.join(os.pardir,"ExtractGAN/data/"+dir1))
     dataset = torchvision.datasets.ImageFolder(root=dir1+"/")
     A_test = []
@@ -48,6 +48,20 @@ def data_loader(dir1):
             A_train.append(x)
         else:
             B_train.append(x)
-    train = data.DataLoader(Dataset(A_train,B_train),batch_size=32, shuffle=True)
-    test = data.DataLoader(Dataset(A_test,B_test),batch_size=32, shuffle=True)
-    return train,test
+    return [A_test,B_test],[A_train,B_train]
+
+def data_loader(dir1,dir2):
+    test_list =[]
+    train_list = []
+    temp_test,temp_train = loading(dir1)
+    test_list+=temp_test
+    train_list+=temp_train
+    temp_test,temp_train = loading(dir2)
+    test_list+=temp_test
+    train_list+=temp_train
+    train_dataset = Dataset(train_list)
+    test_dataset = Dataset(test_list)
+    
+    return train_dataset,test_dataset
+
+data_loader("monet2photo","horse2zebra")
