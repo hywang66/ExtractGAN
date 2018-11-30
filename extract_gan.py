@@ -4,6 +4,41 @@ from torch.nn import init
 from torch.nn import functional as F
 import torchvision.models
 
+
+def get_pretrained_vgg():
+    cfg = [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M']
+
+    def make_partial_vgg16():
+        layers = []
+        in_channels = 3
+        for v in cfg:
+            if v == 'M':
+                layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+            else:
+                conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
+                layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
+                in_channels = v
+        return nn.Sequential(*layers)
+
+    def init_vgg16(vgg):
+        vgg16_state_dict = torchvision.models.vgg16_bn(pretrained=True).state_dict()
+        dict_new = vgg.state_dict().copy()
+        new_list = list(vgg.state_dict().keys())
+        trained_list = list(vgg16_state_dict.keys())
+        
+        # for i in range(self.n_vgg_parameters):
+        for i, _ in enumerate(vgg16.parameters()):
+            dict_new[new_list[i]] = vgg16_state_dict[trained_list[i]]
+        
+        vgg.load_state_dict(dict_new)
+        print('VGG parameters loaded.')
+
+    vgg16 = make_partial_vgg16()
+    init_vgg16(vgg16)
+    return vgg16
+
+    
+
 class ExtractGANModel:
     def __init__(self, opt):
         self.opt = opt
@@ -129,21 +164,12 @@ class ResnetBlock(nn.Module):
   
 
 class StyleExtractor(BaseModule):
-    def __init__(self, n_kernel_channels=64, init_type='xavier', n_hidden=1024):
+    def __init__(self, vgg=get_pretrained_vgg(), n_kernel_channels=64, 
+                 init_type='xavier', n_hidden=1024):
         super(StyleExtractor, self).__init__()
-        # self.cfg = [[64], [64, 'M', 128], [128, 'M', 256], [256, 256, 'M', 512]]
-        self.cfg = [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M']
-        # output size: 224*224*64, 112*112*128, 56*56*256, 28*28*512, 14*14*512, 7*7*512
-        
-        # self.vgg_block_set = set()
-        # self.vgg_block_name_template='vgg_block_%d'
-        # self.nblocks = len(self.cfg)
+
         self.nkc = n_kernel_channels
-        self.vgg16 = None
-        self.make_partial_vgg16()
-        # self.n_vgg_parameters = len(list(self.vgg16.parameters()))
-        self.init_vgg16()
-    
+        self.vgg16 = vgg
         self.representor = nn.Sequential(
             nn.Linear(512 * 7 * 7, n_hidden),
             nn.ReLU(True),
@@ -172,42 +198,8 @@ class StyleExtractor(BaseModule):
         conv_kernels.append(self.conv_kernel_gen_2(deep_features).view(self.nkc, self.nkc, 3, 3))
         conv_kernels.append(self.conv_kernel_gen_3(deep_features).view(self.nkc, self.nkc, 3, 3))
         conv_kernels.append(self.conv_kernel_gen_4(deep_features).view(self.nkc, self.nkc, 3, 3))
-        # vgg_outputs = []
-        # src = x
-        # for i in range(self.nblocks):
-        #     block = getattr(self, self.vgg_block_name_template%i)
-        #     dst  = block(src)
-        #     vgg_outputs.append(dst)
-        #     src = dst
+
         return conv_kernels
-
-    # def make_partial_vgg16(self):
-    #     features = []
-    #     in_channels = 3
-    #     for i, c in enumerate(self.cfg):
-    #         layers = []
-    #         for v in c:
-    #             if v == 'M':
-    #                 layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
-    #             else:
-    #                 conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
-    #                 layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
-    #                 in_channels = v
-    #         block = nn.Sequential(*layers)
-    #         setattr(self, self.vgg_block_name_template%i, block)
-    #         self.vgg_block_set.add(block)
-
-    def make_partial_vgg16(self):
-        layers = []
-        in_channels = 3
-        for v in self.cfg:
-            if v == 'M':
-                layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
-            else:
-                conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
-                layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
-                in_channels = v
-        self.vgg16 = nn.Sequential(*layers)
                       
     def train(self, mode=True):
         r"""
@@ -216,24 +208,12 @@ class StyleExtractor(BaseModule):
         self.training = mode
         for module in self.children():
             # if module in self.vgg_block_set:
-            if module in self.vgg_layer_set:
+            if module is self.vgg16:
                 module.train(False)
             else:
                 module.train(mode)
         return self
     
-    def init_vgg16(self):
-        vgg16_state_dict = torchvision.models.vgg16_bn(pretrained=True).state_dict()
-        dict_new = self.state_dict().copy()
-        new_list = list(self.state_dict().keys())
-        trained_list = list(vgg16_state_dict.keys())
-        
-        # for i in range(self.n_vgg_parameters):
-        for i, _ in enumerate(self.vgg16.parameters()):
-            dict_new[new_list[i]] = vgg16_state_dict[trained_list[i]]
-        
-        self.load_state_dict(dict_new)
-        print('VGG parameters loaded.')
             
 
 class StyleWhitener(BaseModule):
@@ -301,7 +281,37 @@ class Generator(nn.Module):
 
 
 
+class Discriminator(BaseModule):
+    def __init__(self, vgg=get_pretrained_vgg(), 
+                 init_type='xavier', n_hidden=1024):
+        super(Discriminator, self).__init__()
 
+        self.vgg16 = vgg
+        self.classifier = nn.Sequential(
+            nn.Linear(512 * 7 * 7 * 2, n_hidden),
+            nn.ReLU(True),
+            nn.Dropout(),
+            nn.Linear(n_hidden, n_hidden),
+            nn.ReLU(True),
+            nn.Dropout(),
+            nn.Linear(n_hidden, 1),
+            nn.Sigmoid()
+        )
+
+        
+        weights_init_func = lambda m : self.weights_init_func(m, init_type, gain=0.02)
+        for module in self.children():
+            if module is not self.vgg16:
+                module.apply(weights_init_func)       
+        print('Discriminator weights initialized using %s.' % init_type)
+
+    def forward(self, img1, img2):
+        feature1 = self.vgg16(img1).detach().view(img1.size(0), -1)
+        feature2 = self.vgg16(img2).detach().view(img1.size(0), -1)
+        feature_cat = torch.cat((feature1, feature2), 1)
+        prob = self.classifier(feature_cat)
+        return prob
+    
 
 
 # class Encoder_downsampling(nn.Module):
