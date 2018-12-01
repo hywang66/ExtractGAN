@@ -4,6 +4,7 @@ import argparse
 import os
 from util import util
 import torch
+import time
 # import models
 # import data
 
@@ -40,7 +41,7 @@ class BaseOptions():
         parser.add_argument('--max_dataset_size', type=int, default=float("inf"), help='Maximum number of samples allowed per dataset. If the dataset directory contains more than max_dataset_size, only a subset is loaded.')
         parser.add_argument('--resize_or_crop', type=str, default='resize_and_crop', help='scaling and cropping of images at load time [resize_and_crop|crop|scale_width|scale_width_and_crop|none]')
         parser.add_argument('--no_flip', action='store_true', help='if specified, do not flip the images for data augmentation')
-        parser.add_argument('--init_type', type=str, default='normal', help='network initialization [normal|xavier|kaiming|orthogonal]')
+        parser.add_argument('--init_type', type=str, default='xavier', help='network initialization [normal|xavier|kaiming|orthogonal]')
         parser.add_argument('--init_gain', type=float, default=0.02, help='scaling factor for normal, xavier and orthogonal.')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         # parser.add_argument('--suffix', default='', type=str, help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{loadSize}')
@@ -56,6 +57,7 @@ class BaseOptions():
 
         # get the basic options
         opt, _ = parser.parse_known_args()
+        
 
         # # modify model-related parser options
         # model_name = opt.model
@@ -72,6 +74,26 @@ class BaseOptions():
 
         return parser.parse_args()
 
+    # def print_options(self, opt):
+    #     message = ''
+    #     message += '----------------- Options ---------------\n'
+    #     for k, v in sorted(vars(opt).items()):
+    #         comment = ''
+    #         default = self.parser.get_default(k)
+    #         if v != default:
+    #             comment = '\t[default: %s]' % str(default)
+    #         message += '{:>25}: {:<30}{}\n'.format(str(k), str(v), comment)
+    #     message += '----------------- End -------------------'
+    #     print(message)
+
+    #     # save to the disk
+    #     expr_dir = os.path.join(opt.checkpoints_dir, opt.name)
+    #     util.mkdirs(expr_dir)
+    #     file_name = os.path.join(expr_dir, 'opt.txt')
+    #     with open(file_name, 'wt') as opt_file:
+    #         opt_file.write(message)
+    #         opt_file.write('\n')
+
     def print_options(self, opt):
         message = ''
         message += '----------------- Options ---------------\n'
@@ -86,15 +108,17 @@ class BaseOptions():
 
         # save to the disk
         expr_dir = os.path.join(opt.checkpoints_dir, opt.name)
-        util.mkdirs(expr_dir)
+        os.makedirs(expr_dir, exist_ok=True)
+        # util.mkdirs(expr_dir)
         file_name = os.path.join(expr_dir, 'opt.txt')
         with open(file_name, 'wt') as opt_file:
             opt_file.write(message)
-            opt_file.write('\n')
+            opt_file.write('\n')    
 
     def parse(self):
 
         opt = self.gather_options()
+        opt.name = 'ExtractGAN_' + time.strftime("%Y-%m-%d-%H-%M-%S_UTC", time.gmtime())
         opt.isTrain = self.isTrain   # train or test
 
         # # process opt.suffix
