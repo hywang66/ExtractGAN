@@ -23,12 +23,12 @@ def return_transform(size):
     return transform
 
 style_transform = return_transform(224)
-normal_transform = return_transform(64)
+#normal_transform = return_transform(64)
 
 def data_process(A,B):
     a = list(np.random.randint(0,len(A),size = 2))
     b = list(np.random.randint(0,len(B),size = 2))
-    return tuple((normal_transform(A[a[0]]),normal_transform(B[b[0]]),style_transform(A[a[1]]),style_transform(B[b[1]])))
+    return tuple((style_transform(A[a[0]]),style_transform(B[b[0]]),style_transform(A[a[1]]),style_transform(B[b[1]])))
 
 
 def loading(dir1):
@@ -64,4 +64,3 @@ def data_loader(dir1,dir2):
     
     return train_dataset,test_dataset
 
-data_loader("monet2photo","horse2zebra")
