@@ -429,7 +429,7 @@ class ExtractGANModel:
     # save models to the disk
     def save_networks(self, prefix):
         os.makedirs(self.save_dir, exist_ok=True)
-        G_save_filename = '%s_ExtractGAN_G.pth' % prefix
+        G_save_filename = prefix + '_ExtractGAN_G.pth'
         G_save_path = os.path.join(self.save_dir, G_save_filename)
         if len(self.gpu_ids) > 0 and torch.cuda.is_available():
             torch.save(self.G.module.cpu().state_dict(), G_save_path)
@@ -437,7 +437,7 @@ class ExtractGANModel:
         else:
             torch.save(self.G.cpu().state_dict(), G_save_path)
 
-        D_save_filename = '%s_ExtractGAN_D.pth' % prefix
+        D_save_filename = prefix + '_ExtractGAN_D.pth' 
         D_save_path = os.path.join(self.save_dir, D_save_filename)
         if len(self.gpu_ids) > 0 and torch.cuda.is_available():
             torch.save(self.D.module.cpu().state_dict(), D_save_path)
@@ -445,6 +445,23 @@ class ExtractGANModel:
         else:
             torch.save(self.D.cpu().state_dict(), D_save_path)
     
+    # load models from the disk
+    def load_networks(self, load_dir, prefix):
+        G_load_filename = prefix + '_G.pth'
+        G_load_path = os.path.join(load_dir, G_load_filename)
+        print('loading the model from ' + G_load_path)
+        G_state_dict = torch.load(G_load_path, map_location=self.device)
+        if hasattr(G_state_dict, '_metadata'):
+            del G_state_dict._metadata
+        self.G.load_state_dict(G_state_dict)
+
+        D_load_filename = prefix + '_D.pth'
+        D_load_path = os.path.join(load_dir, D_load_filename)
+        print('loading the model from ' + D_load_path)
+        D_state_dict = torch.load(D_load_path, map_location=self.device)
+        if hasattr(D_state_dict, '_metadata'):
+            del D_state_dict._metadata
+        self.D.load_state_dict(D_state_dict)
 
 
 # class Encoder_downsampling(nn.Module):
