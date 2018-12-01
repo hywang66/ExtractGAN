@@ -76,8 +76,11 @@ class Decoder(BaseModule):
                 padding_layer(1),
                 nn.ConvTranspose2d(nf, next_nf, kernel_size=3, padding=0, bias=use_bias),
                 norm_layer(nf),
-                nn.Tanh(),
                 ]
+            if i < len(same_size_nf) - 1:
+                model += [nn.ReLU()]
+            else:
+                model += [nn.Sigmoid()]
 
         self.model = nn.Sequential(*model)
 
@@ -161,21 +164,7 @@ class StyleExtractor(BaseModule):
         conv_kernels.append([k for k in self.conv_kernel_gen_4(deep_features).view(batch_size, self.nkc, self.nkc, 3, 3)])
 
         return conv_kernels
-                      
-    # def train(self, mode=True):
-    #     r"""
-    #     Override the train method inherited from nn.Module to keep vgg blocks always in train mode.
-    #     """
-    #     self.training = mode
-    #     for module in self.children():
-    #         # if module in self.vgg_block_set:
-    #         if module is self.vgg16:
-    #             module.train(False)
-    #         else:
-    #             module.train(mode)
-    #     return self
-    
-            
+                                  
 
 class StyleWhitener(BaseModule):
     def __init__(self, n_blocks=2, dim=64, init_type='xavier', padding_type='zero', norm_layer = nn.InstanceNorm2d, use_dropout=False):
@@ -387,16 +376,16 @@ class ExtractGANModel:
         self.rec_img = self.G(self.stylized_img, self.style_ori_img)
 
     def backward_G(self):
-        loss_G_gen = self.criterionGAN(self.D(self.stylized_img, self.style_ref_img), True)
-        loss_cycle = self.criterionCycle(self.rec_img, self.ori_img)
-        loss_G = loss_G_gen + loss_cycle
-        loss_G.backward()
+        self.loss_G_gen = self.criterionGAN(self.D(self.stylized_img, self.style_ref_img), True)
+        self.loss_cycle = self.criterionCycle(self.rec_img, self.ori_img)
+        self.loss_G = self.loss_G_gen + self.loss_cycle
+        self.loss_G.backward()
 
     def backward_D(self):
-        loss_D_same = self.criterionGAN(self.D(self.style_img, self.style_ref_img), True)
-        loss_D_diff = self.criterionGAN(self.D(self.stylized_img.detach(), self.style_ref_img), False)
-        loss_D = (loss_D_same + loss_D_diff) * 0.5
-        loss_D.backward()
+        self.loss_D_same = self.criterionGAN(self.D(self.style_img, self.style_ref_img), True)
+        self.loss_D_diff = self.criterionGAN(self.D(self.stylized_img.detach(), self.style_ref_img), False)
+        self.loss_D = (self.loss_D_same + self.loss_D_diff) * 0.5
+        self.loss_D.backward()
 
     def optimize_parameters(self):
         self.forward()
@@ -463,6 +452,9 @@ class ExtractGANModel:
             del D_state_dict._metadata
         self.D.load_state_dict(D_state_dict)
 
+
+# Useful CODE!
+# Do NOT Delete!
 
 # class Encoder_downsampling(nn.Module):
 #     def __init__(self, input_nc=3, same_size_nf=[64, 64], downsampling_nf=[128, 256], 
