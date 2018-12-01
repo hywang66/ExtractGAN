@@ -1,52 +1,12 @@
+import time
+import os
 import torch
 import torch.nn as nn
 from torch.nn import init
 from torch.nn import functional as F
 import torchvision.models
-
-
-def get_pretrained_vgg():
-    cfg = [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M']
-
-    def make_partial_vgg16():
-        layers = []
-        in_channels = 3
-        for v in cfg:
-            if v == 'M':
-                layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
-            else:
-                conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
-                layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
-                in_channels = v
-        return nn.Sequential(*layers)
-
-    def init_vgg16(vgg):
-        vgg16_state_dict = torchvision.models.vgg16_bn(pretrained=True).state_dict()
-        dict_new = vgg.state_dict().copy()
-        new_list = list(vgg.state_dict().keys())
-        trained_list = list(vgg16_state_dict.keys())
-        
-        # for i in range(self.n_vgg_parameters):
-        for i, _ in enumerate(vgg16.parameters()):
-            dict_new[new_list[i]] = vgg16_state_dict[trained_list[i]]
-        
-        vgg.load_state_dict(dict_new)
-        print('VGG parameters loaded.')
-
-    vgg16 = make_partial_vgg16()
-    init_vgg16(vgg16)
-    return vgg16
-
-    
-
-class ExtractGANModel:
-    def __init__(self, opt):
-        self.opt = opt
-        self.isTrain = opt.isTrain
-        self.gpu_ids = opt.gpu_ids
-        self.device = 'cuda:{}'.format(self.gpu_ids[0]) if self.gpu_ids else 'cpu'
-        if opt.resize_or_crop != 'scale_width':
-            torch.backends.cudnn.benchmark = True
+import torchvision.transforms as transforms
+from options.train_options import TrainOptions
 
 
 class BaseModule(nn.Module):
@@ -73,8 +33,7 @@ class BaseModule(nn.Module):
 
 
 class Encoder(BaseModule):
-    def __init__(self, input_nc=3, same_size_nf=[64, 64], init_type='xavier', 
-                 norm_layer=nn.InstanceNorm2d, padding_type='zero'):
+    def __init__(self, input_nc=3, same_size_nf=[64, 64], init_type='xavier', norm_layer=nn.InstanceNorm2d, padding_type='zero'):
         super(Encoder, self).__init__()
         padding_layer = nn.ReflectionPad2d if padding_type == 'reflect' else nn.ZeroPad2d
         use_bias = norm_layer == nn.InstanceNorm2d
@@ -103,8 +62,7 @@ class Encoder(BaseModule):
 
 
 class Decoder(BaseModule):
-    def __init__(self, output_nc=3, same_size_nf=[64, 64], init_type='xavier',
-                 norm_layer=nn.InstanceNorm2d, padding_type='zero'):
+    def __init__(self, output_nc=3, same_size_nf=[64, 64], init_type='xavier', norm_layer=nn.InstanceNorm2d, padding_type='zero'):
         super(Decoder, self).__init__()
         padding_layer = nn.ReflectionPad2d if padding_type == 'reflect' else nn.ZeroPad2d
         use_bias = norm_layer == nn.InstanceNorm2d
@@ -161,15 +119,16 @@ class ResnetBlock(nn.Module):
     def forward(self, x):
         out = F.relu(x + self.conv_block(x), inplace=True)
         return out
-  
-
+    
+    
 class StyleExtractor(BaseModule):
-    def __init__(self, vgg=get_pretrained_vgg(), n_kernel_channels=64, 
-                 init_type='xavier', n_hidden=1024):
+    def __init__(self, vgg=None, n_kernel_channels=64, init_type='xavier', n_hidden=1024):
         super(StyleExtractor, self).__init__()
 
         self.nkc = n_kernel_channels
         self.vgg16 = vgg
+        self.register_buffer('vgg_mean', torch.tensor([0.485, 0.456, 0.406]).view(1,3,1,1))
+        self.register_buffer('vgg_std', torch.tensor([0.229, 0.224, 0.225]).view(1,3,1,1))
         self.representor = nn.Sequential(
             nn.Linear(512 * 7 * 7, n_hidden),
             nn.ReLU(True),
@@ -178,10 +137,10 @@ class StyleExtractor(BaseModule):
             # nn.ReLU(True),
             # nn.Dropout()
         )
-        self.conv_kernel_gen_1 = nn.Linear(n_hidden, n_kernel_channels*n_kernel_channels*3*3)
-        self.conv_kernel_gen_2 = nn.Linear(n_hidden, n_kernel_channels*n_kernel_channels*3*3)
-        self.conv_kernel_gen_3 = nn.Linear(n_hidden, n_kernel_channels*n_kernel_channels*3*3)
-        self.conv_kernel_gen_4 = nn.Linear(n_hidden, n_kernel_channels*n_kernel_channels*3*3)
+        self.conv_kernel_gen_1 = nn.Sequential(nn.Linear(n_hidden, n_kernel_channels*n_kernel_channels*3*3), nn.Tanh())
+        self.conv_kernel_gen_2 = nn.Sequential(nn.Linear(n_hidden, n_kernel_channels*n_kernel_channels*3*3), nn.Tanh())
+        self.conv_kernel_gen_3 = nn.Sequential(nn.Linear(n_hidden, n_kernel_channels*n_kernel_channels*3*3), nn.Tanh())
+        self.conv_kernel_gen_4 = nn.Sequential(nn.Linear(n_hidden, n_kernel_channels*n_kernel_channels*3*3), nn.Tanh())
         
         weights_init_func = lambda m : self.weights_init_func(m, init_type, gain=0.02)
         for module in self.children():
@@ -192,33 +151,34 @@ class StyleExtractor(BaseModule):
         
     def forward(self, x):
         conv_kernels = []
-        features = self.vgg16(x).detach()
+        features = self.vgg16((x-self.vgg_mean)/self.vgg_std)
+        batch_size  = features.size(0)
+        features = features.view(batch_size, -1)
         deep_features = self.representor(features)
-        conv_kernels.append(self.conv_kernel_gen_1(deep_features).view(self.nkc, self.nkc, 3, 3))
-        conv_kernels.append(self.conv_kernel_gen_2(deep_features).view(self.nkc, self.nkc, 3, 3))
-        conv_kernels.append(self.conv_kernel_gen_3(deep_features).view(self.nkc, self.nkc, 3, 3))
-        conv_kernels.append(self.conv_kernel_gen_4(deep_features).view(self.nkc, self.nkc, 3, 3))
+        conv_kernels.append([k for k in self.conv_kernel_gen_1(deep_features).view(batch_size, self.nkc, self.nkc, 3, 3)])
+        conv_kernels.append([k for k in self.conv_kernel_gen_2(deep_features).view(batch_size, self.nkc, self.nkc, 3, 3)])
+        conv_kernels.append([k for k in self.conv_kernel_gen_3(deep_features).view(batch_size, self.nkc, self.nkc, 3, 3)])
+        conv_kernels.append([k for k in self.conv_kernel_gen_4(deep_features).view(batch_size, self.nkc, self.nkc, 3, 3)])
 
         return conv_kernels
                       
-    def train(self, mode=True):
-        r"""
-        Override the train method inherited from nn.Module to keep vgg blocks always in train mode.
-        """
-        self.training = mode
-        for module in self.children():
-            # if module in self.vgg_block_set:
-            if module is self.vgg16:
-                module.train(False)
-            else:
-                module.train(mode)
-        return self
+    # def train(self, mode=True):
+    #     r"""
+    #     Override the train method inherited from nn.Module to keep vgg blocks always in train mode.
+    #     """
+    #     self.training = mode
+    #     for module in self.children():
+    #         # if module in self.vgg_block_set:
+    #         if module is self.vgg16:
+    #             module.train(False)
+    #         else:
+    #             module.train(mode)
+    #     return self
     
             
 
 class StyleWhitener(BaseModule):
-    def __init__(self, n_blocks=2, dim=64, init_type='xavier', padding_type='zero', 
-                 norm_layer = nn.InstanceNorm2d, use_dropout=False):
+    def __init__(self, n_blocks=2, dim=64, init_type='xavier', padding_type='zero', norm_layer = nn.InstanceNorm2d, use_dropout=False):
         super(StyleWhitener, self).__init__()
         model = []
         for _ in range(n_blocks):
@@ -234,21 +194,20 @@ class StyleWhitener(BaseModule):
 
     def forward(self, x):
         return self.model(x)
- 
 
+    
 class KernelSpecifiedResnetBlock(nn.Module):
     def __init__(self):
         super(KernelSpecifiedResnetBlock, self).__init__()
 
-    def forward(self, x, kernel1, kernel2):
-        conv1 = F.conv2d(x, kernel1, padding=1)
-        conv1_relu = F.relu(conv1, inplace=True)
-        conv2 = F.conv2d(conv1_relu, kernel2, padding=1)
-        out = F.relu(x + conv2, inplace=True)
+    def forward(self, x_batch_tensor, kernel1, kernel2):
+        conv1_batch = [F.conv2d(x.unsqueeze(0), kernel1[i], padding=1) for i, x in enumerate(x_batch_tensor)]
+        conv1_relu_batch = [F.relu(conv1, inplace=True) for conv1 in conv1_batch]
+        conv2_batch = [F.conv2d(conv1_relu, kernel2[i], padding=1) for i, conv1_relu in enumerate(conv1_relu_batch)]
+        out = F.relu(x_batch_tensor + torch.cat(conv2_batch, dim=0), inplace=True)
         return out
-  
 
-
+    
 class Stylizer(nn.Module):
     def __init__(self):
         super(Stylizer, self).__init__()
@@ -257,16 +216,15 @@ class Stylizer(nn.Module):
     
     def forward(self, whitened, conv_kernels):
         tmp = self.ksr_block1(whitened, conv_kernels[0], conv_kernels[1])
-        return self.ksr_block2(tmp, conv_kernels[3], conv_kernels[4])
+        return self.ksr_block2(tmp, conv_kernels[2], conv_kernels[3])
 
 
 class Generator(nn.Module):
-    def __init__(self, input_nc=3, init_type='xavier', 
-                 norm_layer=nn.InstanceNorm2d, padding_type='zero'):
+    def __init__(self, vgg=None, input_nc=3, init_type='xavier', norm_layer=nn.InstanceNorm2d, padding_type='zero'):
         super(Generator, self).__init__()
         self.encoder = Encoder()
         self.decoder = Decoder()
-        self.style_extractor = StyleExtractor()
+        self.style_extractor = StyleExtractor(vgg=vgg)
         self.style_whitener = StyleWhitener()
         self.stylizer = Stylizer()
         print('Generator build success!')
@@ -282,11 +240,13 @@ class Generator(nn.Module):
 
 
 class Discriminator(BaseModule):
-    def __init__(self, vgg=get_pretrained_vgg(), 
-                 init_type='xavier', n_hidden=1024):
+    def __init__(self, vgg=None, init_type='xavier', n_hidden=1024):
         super(Discriminator, self).__init__()
 
         self.vgg16 = vgg
+        self.register_buffer('vgg_mean', torch.tensor([0.485, 0.456, 0.406]).view(1,3,1,1))
+        self.register_buffer('vgg_std', torch.tensor([0.229, 0.224, 0.225]).view(1,3,1,1))
+
         self.classifier = nn.Sequential(
             nn.Linear(512 * 7 * 7 * 2, n_hidden),
             nn.ReLU(True),
@@ -298,19 +258,192 @@ class Discriminator(BaseModule):
             nn.Sigmoid()
         )
 
-        
         weights_init_func = lambda m : self.weights_init_func(m, init_type, gain=0.02)
         for module in self.children():
             if module is not self.vgg16:
                 module.apply(weights_init_func)       
         print('Discriminator weights initialized using %s.' % init_type)
 
-    def forward(self, img1, img2):
-        feature1 = self.vgg16(img1).detach().view(img1.size(0), -1)
-        feature2 = self.vgg16(img2).detach().view(img1.size(0), -1)
+    def forward(self, img, ref):
+        feature1 = self.vgg16((img - self.vgg_mean)/self.vgg_std).view(img.size(0), -1)
+        feature2 = self.vgg16((ref - self.vgg_mean)/self.vgg_std).view(img.size(0), -1)
         feature_cat = torch.cat((feature1, feature2), 1)
         prob = self.classifier(feature_cat)
         return prob
+    
+
+class GANLoss(nn.Module):
+    def __init__(self, use_lsgan=False, same_style=1.0, diff_style=0.0):
+        super(GANLoss, self).__init__()
+        self.register_buffer('same_style', torch.tensor(same_style))
+        self.register_buffer('diff_style', torch.tensor(diff_style))
+        if use_lsgan:
+            self.loss = nn.MSELoss()
+        else:
+            self.loss = nn.BCELoss()
+
+    def get_target_tensor(self, input, styles_are_same):
+        if styles_are_same:
+            target_tensor = self.same_style
+        else:
+            target_tensor = self.diff_style
+        return target_tensor.expand_as(input)
+
+    def __call__(self, input, styles_are_same):
+        target_tensor = self.get_target_tensor(input, styles_are_same)
+        return self.loss(input, target_tensor)
+
+    
+class ExtractGANModel:
+    def __init__(self, opt):
+        self.opt = opt
+        self.isTrain = opt.isTrain
+        self.name = opt.name
+        self.save_dir = os.path.join(opt.checkpoints_dir, self.name)
+        self.gpu_ids = opt.gpu_ids
+        self.device = 'cuda:{}'.format(self.gpu_ids[0]) if self.gpu_ids else 'cpu'
+        if opt.resize_or_crop != 'scale_width':
+            torch.backends.cudnn.benchmark = True
+
+        self.transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.RandomCrop(32, padding=12),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0),
+            transforms.ToTensor(),
+        ])
+
+        self.vgg16 = self.get_pretrained_vgg()
+        self.G = Generator(vgg=self.vgg16)
+
+        if self.isTrain:
+            self.D = Discriminator(vgg=self.vgg16)
+            self.criterionGAN = GANLoss(use_lsgan=not opt.no_lsgan).to(self.device)
+            self.criterionCycle = torch.nn.L1Loss().to(self.device)
+            self.optimizer_G = torch.optim.Adam(filter(lambda p: p.requires_grad, self.G.parameters()),
+                                                lr=opt.lr, betas=(opt.beta1, 0.999))
+            self.optimizer_D = torch.optim.Adam(filter(lambda p: p.requires_grad, self.D.parameters()),
+                                                lr=opt.lr, betas=(opt.beta1, 0.999))
+        
+        print('New ExtractGAN model initialized!')
+
+    def get_pretrained_vgg(self):
+        cfg = [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M']
+
+        layers = []
+        in_channels = 3
+        for v in cfg:
+            if v == 'M':
+                layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+            else:
+                conv2d = nn.Conv2d(in_channels, v, kernel_size=3, padding=1)
+                layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
+                in_channels = v
+        vgg = nn.Sequential(*layers)
+
+        full_vgg = torchvision.models.vgg16_bn(pretrained=True)
+        full_vgg_state_dict = full_vgg.state_dict()
+        dict_new = vgg.state_dict().copy()
+        new_list = list(vgg.state_dict().keys())
+        trained_list = list(full_vgg_state_dict.keys())
+
+        for i, _ in enumerate(full_vgg.parameters()):
+            dict_new[new_list[i]] = full_vgg_state_dict[trained_list[i]]
+        
+        vgg.load_state_dict(dict_new)
+        print('VGG parameters loaded.')
+
+        for p in vgg.parameters():
+            p.requires_grad = False
+
+        return vgg
+
+    def set_input(self, input):
+        # The image that will be transfered, 224*224
+        self.ori_img = input[0]  
+        # The image in target style, 224*224
+        self.style_img = input[1]
+        
+        if self.isTrain:
+            # Another image in target style for training D, 224*224
+            self.style_ref_img = input[2]
+        
+        # Another image in ori_img's style for reconstruct ori_img, 224*224
+        self.style_ori_img = input[3]
+
+    # set requies_grad=Fasle to avoid computation, keep vgg16 requires_grad=False
+    def set_requires_grad(self, nets, requires_grad: bool):
+        if not isinstance(nets, list):
+            nets = [nets]
+        for net in nets:
+            if net is not None:
+                for p in net.parameters():
+                    p.requires_grad = requires_grad
+        for p in self.vgg16.parameters():
+            p.requires_grad = False
+
+    def forward(self):
+        self.stylized_img = self.G(self.ori_img, self.style_img)
+        self.rec_img = self.G(self.stylized_img, self.style_ori_img)
+
+    def backward_G(self):
+        loss_G_gen = self.criterionGAN(self.D(self.stylized_img, self.style_ref_img), True)
+        loss_cycle = self.criterionCycle(self.rec_img, self.ori_img)
+        loss_G = loss_G_gen + loss_cycle
+        loss_G.backward()
+
+    def backward_D(self):
+        loss_D_same = self.criterionGAN(self.D(self.style_img, self.style_ref_img), True)
+        loss_D_diff = self.criterionGAN(self.D(self.stylized_img.detach(), self.style_ref_img), False)
+        loss_D = (loss_D_same + loss_D_diff) * 0.5
+        loss_D.backward()
+
+    def optimize_parameters(self):
+        self.forward()
+
+        self.set_requires_grad(self.D, False)
+        self.optimizer_G.zero_grad()
+        self.backward_G()
+        self.optimizer_G.step()
+
+        self.set_requires_grad(self.D, True)
+        self.optimizer_D.zero_grad()
+        self.backward_D()
+        self.optimizer_D.step()
+
+    def train(self, mode=True):
+        self.G.train(mode)
+        self.D.train(mode)
+        self.vgg16.eval()
+
+    def eval(self):
+        self.G.eval()
+        self.D.eval()
+
+    # used in test time, wrapping `forward` in no_grad() so we don't save
+    # intermediate steps for backprop
+    def test(self):
+        with torch.no_grad():
+            self.forward()
+    
+    # save models to the disk
+    def save_networks(self, prefix):
+        os.makedirs(self.save_dir, exist_ok=True)
+        G_save_filename = '%s_ExtractGAN_G.pth' % prefix
+        G_save_path = os.path.join(self.save_dir, G_save_filename)
+        if len(self.gpu_ids) > 0 and torch.cuda.is_available():
+            torch.save(self.G.module.cpu().state_dict(), G_save_path)
+            self.G.cuda(self.gpu_ids[0])
+        else:
+            torch.save(self.G.cpu().state_dict(), G_save_path)
+
+        D_save_filename = '%s_ExtractGAN_D.pth' % prefix
+        D_save_path = os.path.join(self.save_dir, D_save_filename)
+        if len(self.gpu_ids) > 0 and torch.cuda.is_available():
+            torch.save(self.D.module.cpu().state_dict(), D_save_path)
+            self.D.cuda(self.gpu_ids[0])
+        else:
+            torch.save(self.D.cpu().state_dict(), D_save_path)
     
 
 
