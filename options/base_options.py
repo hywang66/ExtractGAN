@@ -14,8 +14,7 @@ class BaseOptions():
         self.initialized = False
 
     def initialize(self, parser):
-        # parser.add_argument('--dataroot', required=True, help='path to images (should have subfolders trainA, trainB, valA, valB, etc)')
-        parser.add_argument('--batch_size', type=int, default=1, help='input batch size')
+
         parser.add_argument('--loadSize', type=int, default=286, help='scale images to this size')
         parser.add_argument('--fineSize', type=int, default=256, help='then crop to this size')
         parser.add_argument('--display_winsize', type=int, default=256, help='display window size for both visdom and HTML')
@@ -33,8 +32,6 @@ class BaseOptions():
         parser.add_argument('--direction', type=str, default='AtoB', help='AtoB or BtoA')
         parser.add_argument('--epoch', type=str, default='latest', help='which epoch to load? set to latest to use latest cached model')
         parser.add_argument('--load_iter', type=int, default='0', help='which iteration to load? if load_iter > 0, the code will load models by iter_[load_iter]; otherwise, the code will load models by [epoch]')
-        parser.add_argument('--num_threads', default=1, type=int, help='# threads for loading data')
-        parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints', help='models are saved here')
         parser.add_argument('--norm', type=str, default='instance', help='instance normalization or batch normalization')
         parser.add_argument('--serial_batches', action='store_true', help='if true, takes images in order to make batches, otherwise takes them randomly')
         parser.add_argument('--no_dropout', action='store_true', help='no dropout for the generator')
@@ -45,6 +42,14 @@ class BaseOptions():
         parser.add_argument('--init_gain', type=float, default=0.02, help='scaling factor for normal, xavier and orthogonal.')
         parser.add_argument('--verbose', action='store_true', help='if specified, print more debugging information')
         # parser.add_argument('--suffix', default='', type=str, help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{loadSize}')
+
+        parser.add_argument('--input_size', type=int, default=224, help='224 is the standard input size to VGG16')
+        parser.add_argument('--checkpoints_dir', type=str, default='./checkpoints', help='models are saved here')
+        parser.add_argument('--num_threads', default=1, type=int, help='# threads for loading data')
+        parser.add_argument('--dataroot', type=str, default='./dataset', help='path to images (should have subfolders train, test)')
+        parser.add_argument('--batch_size_ae', type=int, default=10, help='input batch size')
+        parser.add_argument('--batch_size', type=int, default=10, help='input batch size')
+
         self.initialized = True
         return parser
 
