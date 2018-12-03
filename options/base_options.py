@@ -49,6 +49,8 @@ class BaseOptions():
         parser.add_argument('--dataroot', type=str, default='./dataset', help='path to images (should have subfolders train, test)')
         parser.add_argument('--batch_size_ae', type=int, default=10, help='input batch size')
         parser.add_argument('--batch_size', type=int, default=10, help='input batch size')
+        parser.add_argument('--style_extractor_n_hidden', type=int, default=1024, help='style_extractor_n_hidden')
+        parser.add_argument('--discriminator_n_hidden', type=int, default=1024, help='discriminator_n_hidden')
 
         self.initialized = True
         return parser

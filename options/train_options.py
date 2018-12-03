@@ -21,8 +21,6 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--niter', type=int, default=100, help='# of iter at starting learning rate')
         parser.add_argument('--niter_decay', type=int, default=100, help='# of iter to linearly decay learning rate to zero')
         parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of adam')
-        parser.add_argument('--lr', type=float, default=0.0002, help='initial learning rate for adam')
-        parser.add_argument('--lr_ae', type=float, default=0.001, help='initial learning rate for adam')
         parser.add_argument('--no_lsgan', action='store_true', help='do *not* use least square GAN, if false, use vanilla GAN')
         parser.add_argument('--pool_size', type=int, default=50, help='the size of image buffer that stores previously generated images')
         parser.add_argument('--no_html', action='store_true', help='do not save intermediate training results to [opt.checkpoints_dir]/[opt.name]/web/')
@@ -30,8 +28,12 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--lr_decay_iters', type=int, default=50, help='multiply by a gamma every lr_decay_iters iterations')
         
         parser.add_argument('--n_epoch', type=int, default=100, help='number of epoahes')
-
-
-
+        parser.add_argument('--cycle_loss', type=str, default='L1', help='L1 or MSE')
+        parser.add_argument('--ae_loss', type=str, default='L1', help='L1 or MSE')
+        parser.add_argument('--lr', type=float, default=0.0002, help='initial learning rate for adam')
+        parser.add_argument('--lr_ae', type=float, default=1e-3, help='initial learning rate for adam')
+        parser.add_argument('--no_D_additional_layer', action='store_true', help='do *not* use additional layer in Discriminator')
+        parser.add_argument('--gl_coefficient', type=float, default=1e4, help='coefficient of ganloss')
+        
         self.isTrain = True
         return parser

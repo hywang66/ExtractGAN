@@ -36,16 +36,33 @@ class BaseModule(nn.Module):
 
 
 class Encoder(BaseModule):
-    def __init__(self, input_nc=3, same_size_nf=[64, 64], init_type='xavier', norm_layer=nn.InstanceNorm2d, padding_type='zero'):
+    def __init__(self, input_nc=3, same_size_nf = [32], downsampling_nf=[64], init_type='xavier', norm_layer=nn.InstanceNorm2d, padding_type='zero'):
         super(Encoder, self).__init__()
+
+        self.same_size_nf = same_size_nf
+        self.downsampling_nf = downsampling_nf
+
         padding_layer = nn.ReflectionPad2d if padding_type == 'reflect' else nn.ZeroPad2d
         use_bias = norm_layer == nn.InstanceNorm2d
         
         model = []
 
-        # same-size layers
+
         last_nf = input_nc
-        for nf in same_size_nf:
+        
+        # same-size layers
+        if same_size_nf:
+            for nf in same_size_nf:
+                model += [
+                    padding_layer(1),
+                    nn.Conv2d(last_nf, nf, kernel_size=3, padding=0, bias=use_bias),
+                    norm_layer(nf),
+                    nn.ReLU(inplace=True),
+                    ]
+                last_nf = nf
+
+        # downsampling layers
+        for nf in downsampling_nf:
             model += [
                 padding_layer(1),
                 nn.Conv2d(last_nf, nf, stride=2, kernel_size=3, padding=0, bias=use_bias),
@@ -65,25 +82,42 @@ class Encoder(BaseModule):
 
 
 class Decoder(BaseModule):
-    def __init__(self, output_nc=3, same_size_nf=[64, 64], init_type='xavier', norm_layer=nn.InstanceNorm2d, padding_type='zero'):
+    def __init__(self, output_nc=3, same_size_nf=[32], upsampling_nf=[64], init_type='xavier', norm_layer=nn.InstanceNorm2d, padding_type='zero'):
         super(Decoder, self).__init__()
-        padding_layer = nn.ReflectionPad2d if padding_type == 'reflect' else nn.ZeroPad2d
+
+        self.same_size_nf = same_size_nf
+        self.upsampling_nf = upsampling_nf
+
+        # padding_layer = nn.ReflectionPad2d if padding_type == 'reflect' else nn.ZeroPad2d
         use_bias = norm_layer == nn.InstanceNorm2d
         
         model = []
 
-        # same-size layers
-        for i, nf in enumerate(same_size_nf):
-            next_nf = output_nc if i == len(same_size_nf) - 1 else same_size_nf[i + 1]
+        # upsampling layers
+        last_next_nf = output_nc if not same_size_nf else same_size_nf[0]
+        for i, nf in enumerate(upsampling_nf):
+            next_nf = last_next_nf if i == len(upsampling_nf) - 1 else upsampling_nf[i + 1]
             model += [
                 # padding_layer(1),
                 nn.ConvTranspose2d(nf, next_nf, stride=2, kernel_size=3, padding=1, output_padding=1, bias=use_bias),
                 norm_layer(nf),
                 ]
-            if i < len(same_size_nf) - 1:
+            model += [nn.ReLU()]
+
+
+        # same-size layers
+        if same_size_nf:
+            for i, nf in enumerate(same_size_nf):
+                next_nf = output_nc if i == len(same_size_nf) - 1 else same_size_nf[i + 1]
+                model += [
+                    # padding_layer(1),
+                    nn.ConvTranspose2d(nf, next_nf, kernel_size=3, padding=1, bias=use_bias),
+                    norm_layer(nf),
+                    ]
                 model += [nn.ReLU()]
-            else:
-                model += [nn.Sigmoid()]
+                    
+        model = model[:-1]
+        model += [nn.Sigmoid()]
 
         self.model = nn.Sequential(*model)
 
@@ -212,11 +246,12 @@ class Stylizer(nn.Module):
 
 
 class Generator(nn.Module):
-    def __init__(self, vgg=None, input_nc=3, init_type='xavier', norm_layer=nn.InstanceNorm2d, padding_type='zero'):
+    def __init__(self, vgg=None, same_size_nf=[32], upsampling_nf=[64], downsampling_nf=[64],
+                 n_hidden=1024, init_type='xavier', norm_layer=nn.InstanceNorm2d, padding_type='zero'):
         super(Generator, self).__init__()
-        self.encoder = Encoder()
-        self.decoder = Decoder()
-        self.style_extractor = StyleExtractor(vgg=vgg)
+        self.encoder = Encoder(same_size_nf=same_size_nf, downsampling_nf=downsampling_nf)
+        self.decoder = Decoder(same_size_nf=same_size_nf, upsampling_nf=upsampling_nf)
+        self.style_extractor = StyleExtractor(vgg=vgg, n_hidden=n_hidden)
         self.style_whitener = StyleWhitener()
         self.stylizer = Stylizer()
         print('Generator build success!')
@@ -232,23 +267,31 @@ class Generator(nn.Module):
 
 
 class Discriminator(BaseModule):
-    def __init__(self, vgg=None, init_type='xavier', n_hidden=1024):
+    def __init__(self, vgg=None, init_type='xavier', n_hidden=1024, additional_layer=True):
         super(Discriminator, self).__init__()
 
         self.vgg16 = vgg
         self.register_buffer('vgg_mean', torch.tensor([0.485, 0.456, 0.406]).view(1,3,1,1))
         self.register_buffer('vgg_std', torch.tensor([0.229, 0.224, 0.225]).view(1,3,1,1))
 
-        self.classifier = nn.Sequential(
+        classifier = []
+        classifier += [
             nn.Linear(512 * 7 * 7 * 2, n_hidden),
             nn.ReLU(True),
             nn.Dropout(),
-            nn.Linear(n_hidden, n_hidden),
-            nn.ReLU(True),
-            nn.Dropout(),
+        ]
+        if additional_layer:
+            classifier += [
+                nn.Linear(n_hidden, n_hidden),
+                nn.ReLU(True),
+                nn.Dropout(), 
+            ]
+        classifier += [
             nn.Linear(n_hidden, 1),
             nn.Sigmoid()
-        )
+        ]
+
+        self.classifier = nn.Sequential(*classifier)
 
         weights_init_func = lambda m : self.weights_init_func(m, init_type, gain=0.02)
         for module in self.children():
@@ -265,8 +308,9 @@ class Discriminator(BaseModule):
     
 
 class GANLoss(nn.Module):
-    def __init__(self, use_lsgan=False, same_style=1.0, diff_style=0.0):
+    def __init__(self, use_lsgan=False, same_style=1.0, diff_style=0.0, coefficient=1e4):
         super(GANLoss, self).__init__()
+        self.coefficient = coefficient
         self.register_buffer('same_style', torch.tensor(same_style))
         self.register_buffer('diff_style', torch.tensor(diff_style))
         if use_lsgan:
@@ -283,29 +327,53 @@ class GANLoss(nn.Module):
 
     def __call__(self, input, styles_are_same):
         target_tensor = self.get_target_tensor(input, styles_are_same)
-        return self.loss(input, target_tensor)
+        return self.loss(input, target_tensor)*self.coefficient
 
     
 class ExtractGANModel:
-    def __init__(self, opt):
+    def __init__(self, opt, same_size_nf=[32], upsampling_nf=[64], downsampling_nf=[64]):
         self.opt = opt
         self.isTrain = opt.isTrain
         self.name = opt.name
         self.save_dir = os.path.join(opt.checkpoints_dir, self.name)
         self.gpu_ids = opt.gpu_ids
         self.device = 'cuda:{}'.format(self.gpu_ids[0]) if self.gpu_ids else 'cpu'
-        if opt.resize_or_crop != 'scale_width':
+        if self.device is not 'cpu':
             torch.backends.cudnn.benchmark = True
 
-        self.vgg16 = self.get_pretrained_vgg()
-        self.G = Generator(vgg=self.vgg16)
+        self.vgg16 = self.get_pretrained_vgg().to(self.device)
+        self.G = Generator(vgg=self.vgg16, same_size_nf=same_size_nf, n_hidden=opt.style_extractor_n_hidden,
+                           upsampling_nf=upsampling_nf, downsampling_nf=downsampling_nf).to(self.device)
+
+        self.bcedloss = GANLoss(use_lsgan=False, 
+                                coefficient=opt.gl_coefficient).to(self.device)
 
         if self.isTrain:
-            self.D = Discriminator(vgg=self.vgg16)
-            self.criterionGAN = GANLoss(use_lsgan=not opt.no_lsgan).to(self.device)
-            self.criterionCycle = torch.nn.L1Loss().to(self.device)
-            # self.criterionAE = torch.nn.L1Loss().to(self.device)
-            self.criterionAE = torch.nn.MSELoss().to(self.device)
+            self.D = Discriminator(vgg=self.vgg16, n_hidden=opt.discriminator_n_hidden, 
+                                   additional_layer=not opt.no_D_additional_layer).to(self.device)
+            self.criterionGAN = GANLoss(use_lsgan=not opt.no_lsgan, 
+                                        coefficient=opt.gl_coefficient).to(self.device)
+
+
+            # Do NOT use torch.nn.*Loss, they are quite bugful in PyTorch 0.4.
+            if opt.cycle_loss == 'L1':
+                # self.criterionCycle = torch.nn.L1Loss().to(self.device)
+                self.criterionCycle = self.get_L1Loss()
+            elif opt.cycle_loss == 'MSE':
+                # self.criterionCycle = torch.nn.MSELoss().to(self.device)
+                self.criterionCycle = self.get_MSELoss()
+            else:
+                raise NotImplementedError('cycle_loss [%s] is not implemented' % opt.cycle_loss)
+
+            if opt.ae_loss == 'L1':
+                # self.criterionAE = torch.nn.L1Loss().to(self.device)
+                self.criterionAE = self.get_L1Loss()
+            elif opt.ae_loss == 'MSE':
+                # self.criterionAE = torch.nn.MSELoss().to(self.device)
+                self.criterionAE = self.get_MSELoss()
+            else:
+                raise NotImplementedError('ae_loss [%s] is not implemented' % opt.ae_loss)
+
             self.optimizer_G = torch.optim.Adam(filter(lambda p: p.requires_grad, self.G.parameters()),
                                                 lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizer_D = torch.optim.Adam(filter(lambda p: p.requires_grad, self.D.parameters()),
@@ -316,6 +384,13 @@ class ExtractGANModel:
                                                 # lr=opt.lr_ae, betas=(opt.beta1, 0.999))
                                                    
         print('New ExtractGAN model initialized!')
+
+    def get_L1Loss(self):
+        return lambda a, b : torch.mean(torch.sum(torch.abs(a-b), dim=(1,2,3)))
+    
+    def get_MSELoss(self):
+        return lambda a, b : torch.mean(torch.sum(torch.pow(a-b, 2), dim=(1,2,3)))
+
 
     def get_pretrained_vgg(self):
         cfg = [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512, 'M']
@@ -376,15 +451,15 @@ class ExtractGANModel:
         for p in self.vgg16.parameters():
             p.requires_grad = False
 
-    def set_requires_grad_AE(self, requires_grad: bool):
-        for p in self.D.parameters():
-            p.requires_grad = False
-        for p in self.G.parameters():
-            p.requires_grad = False
-        for p in self.G.encoder.parameters():
-            p.requies_grad = requires_grad
-        for p in self.G.decoder.parameters():
-            p.requies_grad = requires_grad        
+    # def set_requires_grad_AE(self, requires_grad: bool):
+    #     for p in self.D.parameters():
+    #         p.requires_grad = False
+    #     for p in self.G.parameters():
+    #         p.requires_grad = False
+    #     for p in self.G.encoder.parameters():
+    #         p.requies_grad = requires_grad
+    #     for p in self.G.decoder.parameters():
+    #         p.requies_grad = requires_grad        
 
     def forward(self):
         self.stylized_img = self.G(self.ori_img, self.style_img)
@@ -410,6 +485,7 @@ class ExtractGANModel:
         self.loss_AE.backward()
 
     def optimize_parameters(self):
+        self.set_requires_grad(self.G, True)
         self.forward()
 
         self.set_requires_grad(self.D, False)
@@ -420,6 +496,10 @@ class ExtractGANModel:
         self.set_requires_grad(self.D, True)
         self.optimizer_D.zero_grad()
         self.backward_D()
+
+        #debug
+        # raise Exception
+
         self.optimizer_D.step()
     
     def optimize_parameters_AE(self):
@@ -431,6 +511,17 @@ class ExtractGANModel:
         self.optimizer_AE.zero_grad()
         self.backward_AE()
         self.optimizer_AE.step()
+
+    def optimize_parameters_D(self):
+        self.set_requires_grad(self.D, True)
+        self.optimizer_D.zero_grad()
+        same = self.D(self.ori_img, self.style_ori_img)
+        diff = self.D(self.ori_img, self.style_img)
+        self.loss_D_same = self.criterionGAN(same, True)
+        self.loss_D_diff = self.criterionGAN(diff, False)
+        self.loss_D = (self.loss_D_same + self.loss_D_diff) * 0.5
+        self.loss_D.backward()
+        self.optimizer_D.step()
 
     def train(self, mode=True):
         self.G.train(mode)
