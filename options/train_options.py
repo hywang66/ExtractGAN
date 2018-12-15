@@ -34,6 +34,6 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--lr_ae', type=float, default=1e-3, help='initial learning rate for adam')
         parser.add_argument('--no_D_additional_layer', action='store_true', help='do *not* use additional layer in Discriminator')
         parser.add_argument('--gl_coefficient', type=float, default=1e4, help='coefficient of ganloss')
-        
+        parser.add_argument('--style_weight', type=float, default=1e6, help='weight of style loss')        
         self.isTrain = True
         return parser
